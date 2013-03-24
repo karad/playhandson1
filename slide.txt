@@ -1,0 +1,321 @@
+
+--------------------------------------------------------------------------------------------- 第1部
+
+■Play frameworkとは
+■バージョン 2.xについて
+■PlayとScalaとJava
+
+■Play frameworkのサイト
+
+英語版（本家）
+http://www.playframework.com/
+日本語版（有志）
+http://www.playframework-ja.org/
+モジュール一覧（暫定）
+https://github.com/garbagetown/playdocja/blob/master/documentation/2.0.4/manual/Modules.md
+
+-------------------------------
+
+■playのパス
+
+UNIX系
+export PATH=$PATH:/relativePath/to/play
+Windows系
+XPは、
+;C:\play-2.0
+とか、インストール先のディレクトリへ入れる
+
+-------------------------------
+
+■$ play
+
+→きちんとPlayが起動することを確認
+
+■$ play new wsPractice1
+
+→下記のように進める
+
+What is the application name? [wsPractice1]
+> そのままEnterを押す
+
+Which template do you want to use for this new application? 
+
+  1             - Create a simple Scala application
+  2             - Create a simple Java application
+
+> 2を選ぶ
+OK, application wsPractice1 is created.
+
+Have fun!
+
+■$ cd wsPractice1
+■$ play
+
+→Playコンソールに入る
+
+■[wsPractice1] $ run
+
+→起動して、 http://localhost:9000/ へアクセス
+→無事スタート画面が表示されればOK
+
+■IDE
+
+→IDEAの場合
+[wsPractice1] $ idea
+
+→Eclipseの場合
+[wsPractice1] $ eclipse
+
+-------------------------------
+
+■フォルダ構成の話
+
+→app
+→app/controllers
+→app/views
+→app/models
+→conf
+→conf/application.conf
+→conf/routes
+→public
+→project
+
+-------------------------------
+
+■controllers/Application.java
+
+return ok(index.render("Hello world"));
+
+→中身変更
+
+■views/index.scala.html
+
+→まず中身見てみる
+
+@*@play20.welcome(message, style = "Java")*@
+
+→コメントアウト
+
+@message
+
+を追加
+
+-------------------------------
+
+■views/index.scala.html
+
+public static Result hello() {
+    return ok(index.render("Hello world"));
+}
+
+→もう一つメソッド追加
+
+public static Result hello() {
+    session("username", "kara_d");
+    return ok(index.render("Hello world"));
+}
+
+→下記追加
+
+session("username", "kara_d");
+
+■conf/route
+
+GET     /hello                      controllers.Application.hello()
+
+→7行目に追加
+
+-------------------------------
+
+■views/index.scala.html
+
+@session.get("username")
+
+→@messageの下に追加
+
+-------------------------------
+
+■viewはコンパイルされる
+
+→target/scala-2.10/src_managed/main/views/html/以下を見てみる
+
+---------------------------------------------------------------------------------------------
+
+WebSocketのサンプルを起動させてみる
+
+$ cd PLAY/samples/java/websocket-chat
+$ play
+[websocket-chat] $ run
+
+--------------------------------------------------------------------------------------------- 第2部
+
+■controllers/Application.java
+
+→#1を編集
+
+---- ↓ここから
+public static Result draggable(String username) {
+    session("username", username);
+    return ok(draggable.render("ドラッグアプリ", username));
+}
+---- ↑ここまで
+
+→#2を編集
+
+public static WebSocket<JsonNode> ws() {
+    final String username = session("username");
+    return new WebSocket<JsonNode>() {
+        public void onReady(final WebSocket.In<JsonNode> in, final WebSocket.Out<JsonNode> out) {
+            try {
+                WebSocketActor.join(username, in, out);
+            } catch (Exception e) {
+                Logger.error("Can't connect WebSocket");
+                e.printStackTrace();
+            }
+        }
+    };
+}
+
+-------------------------------
+
+■events/Event.java
+■events/EventUtil.java
+■events/Message.java
+■events/WebSocketEvent.java
+
+→上記コードの解説
+
+■イベントシステムについて
+
+-------------------------------
+
+■views/draggable.scala.html
+■views/main.scala.html
+
+→上記コードの解説
+
+■public/jquery-ui-1.10.2.custom.min.js
+■public/site.js
+■public/swfobject.js
+■public/web_socket.js
+■public/WebSocketMain.swf
+
+→上記コードの解説
+
+-------------------------------
+
+■models/WebSocketActor.java
+
+→#3を編集
+
+private final static ActorRef ref = Akka.system().actorOf(new Props(WebSocketActor.class));
+
+→#4を編集
+
+Map<String, WebSocket.Out<JsonNode>> members = new HashMap<String, WebSocket.Out<JsonNode>>();
+
+→#5を編集
+
+public static void join(final String username, WebSocket.In<JsonNode> in, WebSocket.Out<JsonNode> out) throws Exception {
+
+    // 初回アクセス時にJOINイベントを発生
+    Boolean result = (Boolean) Await.result(ask(ref, new Message(username, "", "", WebSocketEvent.JOIN, out), 1000), Duration.create(1, SECONDS));
+
+    if(result) {
+        // WebSocketを通じて入ってきたJSONがあれば、MESSAGEイベントを発生
+        in.onMessage(new Callback<JsonNode>() {
+            public void invoke(JsonNode event) {
+                ref.tell(new Message(username, event.get("x").asText(), event.get("y").asText(), WebSocketEvent.MESSAGE, null));
+            }
+        });
+        // WebSocketがクローズしたときに、QUITイベントの発生
+        in.onClose(new Callback0() {
+            public void invoke() {
+                ref.tell(new Message(username, "", "", WebSocketEvent.QUIT, null));
+            }
+        });
+    } else {
+        // エラーの送出
+        ObjectNode error = Json.newObject();
+        error.put("error", result);
+        out.write(error);
+    }
+}
+
+→#6を編集
+
+@Override
+public void onReceive(Object message) throws Exception {
+
+    // イベントかどうか判定
+    Option<Message> event = EventUtil.getEvent(message);
+    if(event.isDefined()){
+        Message m = event.get();
+        switch (m.getEventType()) {
+            // 送信先メンバーに追加
+            case JOIN:
+                members.put(m.getUsername(), m.getChannel());
+                getSender().tell(true);
+                break;
+            // 全員にメッセージを送信
+            case MESSAGE:
+                WebSocketMessenger.notifyAll(m.getUsername(), m.getX(), m.getY(), members);
+                break;
+            // 送信先メンバーから除外
+            case QUIT:
+                members.remove(m.getUsername());
+                break;
+            default:
+                unhandled(message);
+                break;
+        }
+    }
+
+}
+
+-------------------------------
+
+■models/WebSocketMessenger.java
+
+→#7を編集
+
+public static void notifyAll(String username, String x, String y, Map<String, WebSocket.Out<JsonNode>> members) {
+    for(WebSocket.Out<JsonNode> channel: members.values()) {
+
+    	// ユーザー名と座標の指定
+        ObjectNode event = Json.newObject();
+        event.put("username", username);
+        event.put("x", x);
+        event.put("y", y);
+
+        // メンバーの一覧作成
+        ArrayNode m = event.putArray("members");
+        for(String u: members.keySet()) {
+            m.add(u);
+        }
+        System.out.println("JSON:" + event.toString());
+        channel.write(event);
+    }
+}
+
+
+--------------------------------------------------------------------------------------------- 発展
+
+・ドラッグできるオブジェクトを増やすには？
+・色を変えられるようにしたいんだけど？
+・中身を書き換えられるようにするにはどうしたらいいんだろう？
+
+--------------------------------------------------------------------------------------------- 告知
+
+26日火曜日19:00より
+Playはじめて＆もくもく会します!
+
+[Play部屋] 第10回 Play 2.1 はじめて＆もくもく会 - 日本Playframeworkユーザー会 
+http://playframeworkja.doorkeeper.jp/events/3380
+参加料：会場利用代 ¥1,000
+
+
+
+
+
+
